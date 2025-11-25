@@ -491,9 +491,20 @@ const App = () => {
                 background: `linear-gradient(to right, ${assetColor} 0%, ${assetColor} ${asset.targetPercent || 0}%, #2a2a35 ${asset.targetPercent || 0}%, #2a2a35 100%)`
               }}
             />
-            <p style={{ color: '#5a5a6a', fontSize: 10, marginTop: 4 }}>
-              Now: {currentPercent.toFixed(1)}%
-            </p>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 6 }}>
+              <span style={{ color: '#5a5a6a', fontSize: 10 }}>Now: {currentPercent.toFixed(1)}%</span>
+              <input
+                type="number"
+                className="input-field mono"
+                value={asset.targetPercent || ''}
+                onChange={(e) => updateAsset(asset.id, 'targetPercent', e.target.value)}
+                style={{ width: 65, padding: '4px 8px', fontSize: 11, textAlign: 'right' }}
+                min="0"
+                max="100"
+                step="0.5"
+                placeholder="%"
+              />
+            </div>
           </div>
           
           {/* Action */}
