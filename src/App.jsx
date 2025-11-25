@@ -229,9 +229,37 @@ const App = () => {
   };
 
   const updateAsset = (id, field, value) => {
-    setAssets(assets.map(a => 
-      a.id === id ? { ...a, [field]: field === 'category' ? value : (parseFloat(value) || 0) } : a
-    ));
+    setAssets(assets.map(a => {
+      if (a.id !== id) return a;
+      
+      // For category, use the value directly
+      if (field === 'category') {
+        return { ...a, [field]: value };
+      }
+      
+      // For numeric fields, store the raw string to allow typing decimals
+      // Empty string becomes 0 for calculations but allows clearing the field
+      if (value === '' || value === null || value === undefined) {
+        return { ...a, [field]: 0, [`${field}_raw`]: '' };
+      }
+      
+      // Keep the raw string and also store the numeric value
+      const numValue = parseFloat(value);
+      return { 
+        ...a, 
+        [field]: isNaN(numValue) ? 0 : numValue,
+        [`${field}_raw`]: value 
+      };
+    }));
+  };
+
+  // Helper to get display value for inputs
+  const getInputValue = (asset, field) => {
+    const rawKey = `${field}_raw`;
+    if (asset[rawKey] !== undefined && asset[rawKey] !== '') {
+      return asset[rawKey];
+    }
+    return asset[field] || '';
   };
 
   const totalTargetPercent = assets.reduce((sum, a) => sum + (a.targetPercent || 0), 0);
@@ -436,12 +464,12 @@ const App = () => {
           <div style={{ flex: 1, minWidth: 100 }}>
             <label style={{ display: 'block', fontSize: 10, color: '#6a6a7a', marginBottom: 4, fontWeight: 500 }}>HOLDINGS</label>
             <input
-              type="number"
+              type="text"
+              inputMode="decimal"
               className="input-field"
-              value={asset.holdings || ''}
+              value={getInputValue(asset, 'holdings')}
               onChange={(e) => updateAsset(asset.id, 'holdings', e.target.value)}
               placeholder="0"
-              step="any"
               style={{ padding: '8px 10px', fontSize: 13 }}
             />
             <p className="mono" style={{ color: '#5a5a6a', fontSize: 11, marginTop: 4 }}>
@@ -453,12 +481,12 @@ const App = () => {
           <div style={{ flex: 1, minWidth: 90 }}>
             <label style={{ display: 'block', fontSize: 10, color: '#6a6a7a', marginBottom: 4, fontWeight: 500 }}>BUY PRICE</label>
             <input
-              type="number"
+              type="text"
+              inputMode="decimal"
               className="input-field"
-              value={asset.buyPrice || ''}
+              value={getInputValue(asset, 'buyPrice')}
               onChange={(e) => updateAsset(asset.id, 'buyPrice', e.target.value)}
               placeholder="0"
-              step="any"
               style={{ padding: '8px 10px', fontSize: 13 }}
             />
             <p className="mono" style={{ 
