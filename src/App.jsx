@@ -328,8 +328,10 @@ const App = () => {
     URL.revokeObjectURL(url);
   };
 
-  // Pie Chart Component
-  const PieChart = ({ data, title, size = 160 }) => {
+  // Pie Chart Component with hover
+  const PieChart = ({ data, title, size = 160, showValue = false }) => {
+    const [hoveredIndex, setHoveredIndex] = useState(null);
+    
     if (data.length === 0) return null;
     
     const total = data.reduce((sum, d) => sum + d.value, 0);
@@ -361,24 +363,98 @@ const App = () => {
       };
     });
 
+    const hoveredSeg = hoveredIndex !== null ? segments[hoveredIndex] : null;
+
     return (
-      <div style={{ textAlign: 'center' }}>
+      <div style={{ textAlign: 'center', position: 'relative' }}>
         <p style={{ color: '#9a9aaa', fontSize: 11, marginBottom: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '1px' }}>{title}</p>
-        <svg width={size} height={size} viewBox="0 0 100 100" style={{ filter: 'drop-shadow(0 4px 12px rgba(0,0,0,0.3))' }}>
-          {segments.map((seg, i) => (
-            <path
-              key={i}
-              d={seg.path}
-              fill={seg.color}
-              stroke="#1a1a24"
-              strokeWidth="1"
-            />
-          ))}
-          <circle cx="50" cy="50" r="22" fill="#1a1a24" />
-        </svg>
+        <div style={{ position: 'relative', display: 'inline-block' }}>
+          <svg width={size} height={size} viewBox="0 0 100 100" style={{ filter: 'drop-shadow(0 4px 12px rgba(0,0,0,0.3))' }}>
+            {segments.map((seg, i) => (
+              <path
+                key={i}
+                d={seg.path}
+                fill={seg.color}
+                stroke="#1a1a24"
+                strokeWidth="1"
+                style={{ 
+                  cursor: 'pointer',
+                  opacity: hoveredIndex === null || hoveredIndex === i ? 1 : 0.4,
+                  transform: hoveredIndex === i ? 'scale(1.03)' : 'scale(1)',
+                  transformOrigin: '50px 50px',
+                  transition: 'all 0.15s ease'
+                }}
+                onMouseEnter={() => setHoveredIndex(i)}
+                onMouseLeave={() => setHoveredIndex(null)}
+              />
+            ))}
+            <circle cx="50" cy="50" r="22" fill="#1a1a24" />
+            {/* Center text when hovering */}
+            {hoveredSeg && (
+              <>
+                <text x="50" y="46" textAnchor="middle" fill="#fff" fontSize="8" fontWeight="700" fontFamily="IBM Plex Sans">
+                  {hoveredSeg.label}
+                </text>
+                <text x="50" y="56" textAnchor="middle" fill={hoveredSeg.color} fontSize="7" fontWeight="600" fontFamily="IBM Plex Mono">
+                  {hoveredSeg.percentage.toFixed(1)}%
+                </text>
+              </>
+            )}
+          </svg>
+          {/* Tooltip */}
+          {hoveredSeg && (
+            <div style={{
+              position: 'absolute',
+              bottom: '100%',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              marginBottom: 8,
+              background: '#2a2a35',
+              border: '1px solid #3a3a45',
+              borderRadius: 8,
+              padding: '8px 12px',
+              whiteSpace: 'nowrap',
+              zIndex: 100,
+              boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
+            }}>
+              <p style={{ fontWeight: 600, fontSize: 13, marginBottom: 4, color: '#fff' }}>{hoveredSeg.label}</p>
+              <p style={{ fontSize: 12, color: hoveredSeg.color, fontFamily: 'IBM Plex Mono' }}>
+                {hoveredSeg.percentage.toFixed(1)}%
+              </p>
+              {showValue && (
+                <p style={{ fontSize: 11, color: '#9a9aaa', fontFamily: 'IBM Plex Mono', marginTop: 2 }}>
+                  {formatCurrency(hoveredSeg.value)}
+                </p>
+              )}
+              {/* Arrow */}
+              <div style={{
+                position: 'absolute',
+                top: '100%',
+                left: '50%',
+                transform: 'translateX(-50%)',
+                width: 0,
+                height: 0,
+                borderLeft: '6px solid transparent',
+                borderRight: '6px solid transparent',
+                borderTop: '6px solid #2a2a35',
+              }} />
+            </div>
+          )}
+        </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: 8, marginTop: 12 }}>
           {segments.filter(s => s.percentage > 0).slice(0, 6).map((seg, i) => (
-            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <div 
+              key={i} 
+              style={{ 
+                display: 'flex', 
+                alignItems: 'center', 
+                gap: 4,
+                cursor: 'pointer',
+                opacity: hoveredIndex === null || hoveredIndex === segments.findIndex(s => s.label === seg.label) ? 1 : 0.5,
+              }}
+              onMouseEnter={() => setHoveredIndex(segments.findIndex(s => s.label === seg.label))}
+              onMouseLeave={() => setHoveredIndex(null)}
+            >
               <div style={{ width: 8, height: 8, borderRadius: 2, background: seg.color }} />
               <span style={{ color: '#7a7a8a', fontSize: 10 }}>{seg.label}</span>
             </div>
@@ -901,7 +977,7 @@ const App = () => {
         {assets.length > 0 && (
           <div className="card fade-in" style={{ padding: 24, marginBottom: 24 }}>
             <div style={{ display: 'flex', justifyContent: 'space-around', flexWrap: 'wrap', gap: 32 }}>
-              <PieChart data={currentAllocationData} title="Current Allocation" size={140} />
+              <PieChart data={currentAllocationData} title="Current Allocation" size={140} showValue={true} />
               <PieChart data={targetAllocationData} title="Target Allocation" size={140} />
             </div>
           </div>
