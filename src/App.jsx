@@ -147,6 +147,16 @@ const App = () => {
 
   const pnlPercent = totalCostBasis > 0 ? (totalPnL / totalCostBasis) * 100 : 0;
 
+  const getAssetValue = (asset) => {
+    const price = currency === 'eur' ? asset.priceEur : asset.priceUsd;
+    return asset.holdings * (price || 0);
+  };
+
+  const getCurrentPercent = (asset) => {
+    if (totalValue === 0) return 0;
+    return (getAssetValue(asset) / totalValue) * 100;
+  };
+
   // Allocation health score
   const calculateHealthScore = () => {
     if (assets.length === 0 || totalValue === 0) return 100;
@@ -225,16 +235,6 @@ const App = () => {
   };
 
   const totalTargetPercent = assets.reduce((sum, a) => sum + (a.targetPercent || 0), 0);
-
-  const getAssetValue = (asset) => {
-    const price = currency === 'eur' ? asset.priceEur : asset.priceUsd;
-    return asset.holdings * (price || 0);
-  };
-
-  const getCurrentPercent = (asset) => {
-    if (totalValue === 0) return 0;
-    return (getAssetValue(asset) / totalValue) * 100;
-  };
 
   const getRebalanceAction = (asset) => {
     const currentValue = getAssetValue(asset);
