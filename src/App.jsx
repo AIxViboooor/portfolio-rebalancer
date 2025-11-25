@@ -1,8 +1,22 @@
 import { useState, useEffect, useCallback } from 'react';
 
 const App = () => {
-  const [assets, setAssets] = useState([]);
-  const [currency, setCurrency] = useState('eur');
+  // Load saved data from localStorage on startup
+  const [assets, setAssets] = useState(() => {
+    try {
+      const saved = localStorage.getItem('portfolio-assets');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [currency, setCurrency] = useState(() => {
+    try {
+      return localStorage.getItem('portfolio-currency') || 'eur';
+    } catch {
+      return 'eur';
+    }
+  });
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [isSearching, setIsSearching] = useState(false);
@@ -11,6 +25,24 @@ const App = () => {
   const [pricesLoading, setPricesLoading] = useState(false);
 
   const currencySymbol = currency === 'eur' ? '€' : '$';
+
+  // Save assets to localStorage whenever they change
+  useEffect(() => {
+    try {
+      localStorage.setItem('portfolio-assets', JSON.stringify(assets));
+    } catch (error) {
+      console.error('Failed to save assets:', error);
+    }
+  }, [assets]);
+
+  // Save currency preference to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem('portfolio-currency', currency);
+    } catch (error) {
+      console.error('Failed to save currency:', error);
+    }
+  }, [currency]);
 
   // Debounced search
   useEffect(() => {
