@@ -4,7 +4,7 @@ const App = () => {
   // Load saved data from localStorage on startup
   const [assets, setAssets] = useState(() => {
     try {
-      const saved = localStorage.getItem('portfolio-assets');
+      const saved = localStorage.getItem('portfolio-assets-v2');
       return saved ? JSON.parse(saved) : [];
     } catch {
       return [];
@@ -29,7 +29,7 @@ const App = () => {
   // Save assets to localStorage whenever they change
   useEffect(() => {
     try {
-      localStorage.setItem('portfolio-assets', JSON.stringify(assets));
+      localStorage.setItem('portfolio-assets-v2', JSON.stringify(assets));
     } catch (error) {
       console.error('Failed to save assets:', error);
     }
@@ -78,7 +78,7 @@ const App = () => {
     
     try {
       const response = await fetch(
-        `https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=eur,usd`
+        `https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=eur,usd&include_24hr_change=true`
       );
       const data = await response.json();
       
@@ -86,6 +86,7 @@ const App = () => {
         ...asset,
         priceEur: data[asset.id]?.eur || asset.priceEur || 0,
         priceUsd: data[asset.id]?.usd || asset.priceUsd || 0,
+        change24h: data[asset.id]?.eur_24h_change || 0,
       })));
     } catch (error) {
       console.error('Price fetch failed:', error);
@@ -109,6 +110,60 @@ const App = () => {
     setTotalValue(total);
   }, [assets, currency]);
 
+  // Sort assets by value (highest first)
+  const sortedAssets = [...assets].sort((a, b) => {
+    const priceA = currency === 'eur' ? a.priceEur : a.priceUsd;
+    const priceB = currency === 'eur' ? b.priceEur : b.priceUsd;
+    return (b.holdings * (priceB || 0)) - (a.holdings * (priceA || 0));
+  });
+
+  // Category helpers
+  const safeAssets = sortedAssets.filter(a => a.category === 'safe');
+  const riskyAssets = sortedAssets.filter(a => a.category === 'risky');
+  const uncategorized = sortedAssets.filter(a => !a.category);
+
+  const getCategoryValue = (categoryAssets) => {
+    return categoryAssets.reduce((sum, asset) => {
+      const price = currency === 'eur' ? asset.priceEur : asset.priceUsd;
+      return sum + (asset.holdings * (price || 0));
+    }, 0);
+  };
+
+  const getCategoryTarget = (categoryAssets) => {
+    return categoryAssets.reduce((sum, a) => sum + (a.targetPercent || 0), 0);
+  };
+
+  // Calculate total P&L
+  const totalPnL = assets.reduce((sum, asset) => {
+    const price = currency === 'eur' ? asset.priceEur : asset.priceUsd;
+    const currentValue = asset.holdings * (price || 0);
+    const costBasis = asset.holdings * (asset.buyPrice || 0);
+    return sum + (currentValue - costBasis);
+  }, 0);
+
+  const totalCostBasis = assets.reduce((sum, asset) => {
+    return sum + (asset.holdings * (asset.buyPrice || 0));
+  }, 0);
+
+  const pnlPercent = totalCostBasis > 0 ? (totalPnL / totalCostBasis) * 100 : 0;
+
+  // Allocation health score
+  const calculateHealthScore = () => {
+    if (assets.length === 0 || totalValue === 0) return 100;
+    
+    const totalDeviation = assets.reduce((sum, asset) => {
+      const currentPercent = (getAssetValue(asset) / totalValue) * 100;
+      const targetPercent = asset.targetPercent || 0;
+      return sum + Math.abs(currentPercent - targetPercent);
+    }, 0);
+    
+    // Max deviation would be 200 (everything wrong), so normalize
+    const score = Math.max(0, 100 - (totalDeviation / 2));
+    return Math.round(score);
+  };
+
+  const healthScore = calculateHealthScore();
+
   const addAsset = (coin) => {
     if (assets.find(a => a.id === coin.id)) {
       setShowSearch(false);
@@ -123,8 +178,11 @@ const App = () => {
       thumb: coin.thumb,
       holdings: 0,
       targetPercent: 0,
+      buyPrice: 0,
+      category: null,
       priceEur: 0,
       priceUsd: 0,
+      change24h: 0,
     };
 
     setAssets([...assets, newAsset]);
@@ -136,13 +194,18 @@ const App = () => {
     setTimeout(async () => {
       try {
         const response = await fetch(
-          `https://api.coingecko.com/api/v3/simple/price?ids=${coin.id}&vs_currencies=eur,usd`
+          `https://api.coingecko.com/api/v3/simple/price?ids=${coin.id}&vs_currencies=eur,usd&include_24hr_change=true`
         );
         const data = await response.json();
         
         setAssets(prev => prev.map(asset => 
           asset.id === coin.id 
-            ? { ...asset, priceEur: data[coin.id]?.eur || 0, priceUsd: data[coin.id]?.usd || 0 }
+            ? { 
+                ...asset, 
+                priceEur: data[coin.id]?.eur || 0, 
+                priceUsd: data[coin.id]?.usd || 0,
+                change24h: data[coin.id]?.eur_24h_change || 0,
+              }
             : asset
         ));
       } catch (error) {
@@ -155,20 +218,13 @@ const App = () => {
     setAssets(assets.filter(a => a.id !== id));
   };
 
-  const updateHoldings = (id, value) => {
+  const updateAsset = (id, field, value) => {
     setAssets(assets.map(a => 
-      a.id === id ? { ...a, holdings: parseFloat(value) || 0 } : a
+      a.id === id ? { ...a, [field]: field === 'category' ? value : (parseFloat(value) || 0) } : a
     ));
   };
 
-  const updateTarget = (id, value) => {
-    const newValue = Math.min(100, Math.max(0, parseFloat(value) || 0));
-    setAssets(assets.map(a => 
-      a.id === id ? { ...a, targetPercent: newValue } : a
-    ));
-  };
-
-  const totalTargetPercent = assets.reduce((sum, a) => sum + a.targetPercent, 0);
+  const totalTargetPercent = assets.reduce((sum, a) => sum + (a.targetPercent || 0), 0);
 
   const getAssetValue = (asset) => {
     const price = currency === 'eur' ? asset.priceEur : asset.priceUsd;
@@ -182,7 +238,7 @@ const App = () => {
 
   const getRebalanceAction = (asset) => {
     const currentValue = getAssetValue(asset);
-    const targetValue = (asset.targetPercent / 100) * totalValue;
+    const targetValue = ((asset.targetPercent || 0) / 100) * totalValue;
     const difference = targetValue - currentValue;
     const price = currency === 'eur' ? asset.priceEur : asset.priceUsd;
     
@@ -210,14 +266,284 @@ const App = () => {
     return num.toLocaleString(undefined, { maximumFractionDigits: decimals });
   };
 
+  // Export to CSV
+  const exportToCSV = () => {
+    const headers = ['Symbol', 'Name', 'Category', 'Holdings', 'Buy Price', 'Current Price', 'Value', 'P&L', 'Current %', 'Target %', 'Action'];
+    const rows = sortedAssets.map(asset => {
+      const price = currency === 'eur' ? asset.priceEur : asset.priceUsd;
+      const value = getAssetValue(asset);
+      const pnl = value - (asset.holdings * (asset.buyPrice || 0));
+      const rebalance = getRebalanceAction(asset);
+      
+      return [
+        asset.symbol,
+        asset.name,
+        asset.category || 'uncategorized',
+        asset.holdings,
+        asset.buyPrice || 0,
+        price,
+        value.toFixed(2),
+        pnl.toFixed(2),
+        getCurrentPercent(asset).toFixed(2) + '%',
+        (asset.targetPercent || 0).toFixed(2) + '%',
+        rebalance ? `${rebalance.action} ${formatCurrency(rebalance.amount)}` : 'Balanced'
+      ];
+    });
+
+    const csvContent = [headers, ...rows].map(row => row.join(',')).join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `portfolio-${new Date().toISOString().split('T')[0]}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // Pie Chart Component
+  const PieChart = ({ data, title, size = 160 }) => {
+    if (data.length === 0) return null;
+    
+    const total = data.reduce((sum, d) => sum + d.value, 0);
+    if (total === 0) return null;
+
+    let currentAngle = -90;
+    const segments = data.map((d, i) => {
+      const percentage = (d.value / total) * 100;
+      const angle = (percentage / 100) * 360;
+      const startAngle = currentAngle;
+      currentAngle += angle;
+      
+      const startRad = (startAngle * Math.PI) / 180;
+      const endRad = ((startAngle + angle) * Math.PI) / 180;
+      
+      const x1 = 50 + 40 * Math.cos(startRad);
+      const y1 = 50 + 40 * Math.sin(startRad);
+      const x2 = 50 + 40 * Math.cos(endRad);
+      const y2 = 50 + 40 * Math.sin(endRad);
+      
+      const largeArc = angle > 180 ? 1 : 0;
+      
+      return {
+        ...d,
+        percentage,
+        path: percentage >= 99.9 
+          ? `M 50 10 A 40 40 0 1 1 49.99 10 Z`
+          : `M 50 50 L ${x1} ${y1} A 40 40 0 ${largeArc} 1 ${x2} ${y2} Z`
+      };
+    });
+
+    return (
+      <div style={{ textAlign: 'center' }}>
+        <p style={{ color: '#9a9aaa', fontSize: 11, marginBottom: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '1px' }}>{title}</p>
+        <svg width={size} height={size} viewBox="0 0 100 100" style={{ filter: 'drop-shadow(0 4px 12px rgba(0,0,0,0.3))' }}>
+          {segments.map((seg, i) => (
+            <path
+              key={i}
+              d={seg.path}
+              fill={seg.color}
+              stroke="#1a1a24"
+              strokeWidth="1"
+            />
+          ))}
+          <circle cx="50" cy="50" r="22" fill="#1a1a24" />
+        </svg>
+        <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: 8, marginTop: 12 }}>
+          {segments.filter(s => s.percentage > 0).slice(0, 6).map((seg, i) => (
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <div style={{ width: 8, height: 8, borderRadius: 2, background: seg.color }} />
+              <span style={{ color: '#7a7a8a', fontSize: 10 }}>{seg.label}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  const colors = ['#E84A9C', '#F5D547', '#5B9A6F', '#00b8d4', '#9C6ADE', '#ff6b6b', '#ffa94d', '#74b9ff'];
+  
+  const currentAllocationData = sortedAssets.filter(a => getAssetValue(a) > 0).map((asset, i) => ({
+    label: asset.symbol,
+    value: getAssetValue(asset),
+    color: colors[i % colors.length],
+  }));
+
+  const targetAllocationData = sortedAssets.filter(a => (a.targetPercent || 0) > 0).map((asset, i) => ({
+    label: asset.symbol,
+    value: asset.targetPercent || 0,
+    color: colors[sortedAssets.findIndex(a => a.id === asset.id) % colors.length],
+  }));
+
+  // Render asset card
+  const renderAssetCard = (asset, index) => {
+    const rebalance = getRebalanceAction(asset);
+    const currentPercent = getCurrentPercent(asset);
+    const price = currency === 'eur' ? asset.priceEur : asset.priceUsd;
+    const assetColor = colors[sortedAssets.findIndex(a => a.id === asset.id) % colors.length];
+    const assetPnL = getAssetValue(asset) - (asset.holdings * (asset.buyPrice || 0));
+    
+    return (
+      <div key={asset.id} className="card fade-in" style={{ padding: 20 }}>
+        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center' }}>
+          {/* Asset Info */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 140 }}>
+            <img src={asset.thumb} alt={asset.symbol} style={{ width: 40, height: 40, borderRadius: 10 }} />
+            <div>
+              <p style={{ fontWeight: 600, fontSize: 15, marginBottom: 2 }}>{asset.symbol}</p>
+              <p className="mono" style={{ color: '#7a7a8a', fontSize: 12 }}>
+                {price > 0 ? formatCurrency(price) : '...'}
+              </p>
+            </div>
+          </div>
+          
+          {/* Category Toggle */}
+          <div style={{ minWidth: 100 }}>
+            <div style={{ display: 'flex', gap: 4 }}>
+              <button
+                onClick={() => updateAsset(asset.id, 'category', asset.category === 'safe' ? null : 'safe')}
+                style={{
+                  padding: '4px 8px',
+                  fontSize: 10,
+                  fontWeight: 600,
+                  border: 'none',
+                  borderRadius: 4,
+                  cursor: 'pointer',
+                  background: asset.category === 'safe' ? '#5B9A6F' : '#2a2a35',
+                  color: asset.category === 'safe' ? '#fff' : '#6a6a7a',
+                }}
+              >
+                SAFE
+              </button>
+              <button
+                onClick={() => updateAsset(asset.id, 'category', asset.category === 'risky' ? null : 'risky')}
+                style={{
+                  padding: '4px 8px',
+                  fontSize: 10,
+                  fontWeight: 600,
+                  border: 'none',
+                  borderRadius: 4,
+                  cursor: 'pointer',
+                  background: asset.category === 'risky' ? '#E84A9C' : '#2a2a35',
+                  color: asset.category === 'risky' ? '#fff' : '#6a6a7a',
+                }}
+              >
+                RISKY
+              </button>
+            </div>
+          </div>
+          
+          {/* Holdings */}
+          <div style={{ flex: 1, minWidth: 100 }}>
+            <label style={{ display: 'block', fontSize: 10, color: '#6a6a7a', marginBottom: 4, fontWeight: 500 }}>HOLDINGS</label>
+            <input
+              type="number"
+              className="input-field"
+              value={asset.holdings || ''}
+              onChange={(e) => updateAsset(asset.id, 'holdings', e.target.value)}
+              placeholder="0"
+              step="any"
+              style={{ padding: '8px 10px', fontSize: 13 }}
+            />
+            <p className="mono" style={{ color: '#5a5a6a', fontSize: 11, marginTop: 4 }}>
+              = {formatCurrency(getAssetValue(asset))}
+            </p>
+          </div>
+          
+          {/* Buy Price */}
+          <div style={{ flex: 1, minWidth: 90 }}>
+            <label style={{ display: 'block', fontSize: 10, color: '#6a6a7a', marginBottom: 4, fontWeight: 500 }}>BUY PRICE</label>
+            <input
+              type="number"
+              className="input-field"
+              value={asset.buyPrice || ''}
+              onChange={(e) => updateAsset(asset.id, 'buyPrice', e.target.value)}
+              placeholder="0"
+              step="any"
+              style={{ padding: '8px 10px', fontSize: 13 }}
+            />
+            <p className="mono" style={{ 
+              color: assetPnL >= 0 ? '#5B9A6F' : '#E84A9C', 
+              fontSize: 11, 
+              marginTop: 4,
+              fontWeight: 500,
+            }}>
+              {assetPnL >= 0 ? '+' : ''}{formatCurrency(assetPnL)}
+            </p>
+          </div>
+          
+          {/* Target */}
+          <div style={{ flex: 1, minWidth: 120 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+              <label style={{ fontSize: 10, color: '#6a6a7a', fontWeight: 500 }}>TARGET</label>
+              <span className="mono" style={{ color: assetColor, fontWeight: 600, fontSize: 12 }}>
+                {(asset.targetPercent || 0).toFixed(1)}%
+              </span>
+            </div>
+            <input
+              type="range"
+              className="slider"
+              min="0"
+              max="100"
+              step="0.5"
+              value={asset.targetPercent || 0}
+              onChange={(e) => updateAsset(asset.id, 'targetPercent', e.target.value)}
+              style={{
+                background: `linear-gradient(to right, ${assetColor} 0%, ${assetColor} ${asset.targetPercent || 0}%, #2a2a35 ${asset.targetPercent || 0}%, #2a2a35 100%)`
+              }}
+            />
+            <p style={{ color: '#5a5a6a', fontSize: 10, marginTop: 4 }}>
+              Now: {currentPercent.toFixed(1)}%
+            </p>
+          </div>
+          
+          {/* Action */}
+          <div style={{ minWidth: 100, textAlign: 'right' }}>
+            {rebalance ? (
+              <>
+                <span className={`tag ${rebalance.action === 'BUY' ? 'tag-buy' : 'tag-sell'}`}>
+                  {rebalance.action}
+                </span>
+                <p className="mono" style={{ 
+                  color: rebalance.action === 'BUY' ? '#5B9A6F' : '#E84A9C',
+                  fontWeight: 600,
+                  fontSize: 13,
+                  marginTop: 4,
+                }}>
+                  {formatCurrency(rebalance.amount)}
+                </p>
+              </>
+            ) : (
+              <span style={{ color: '#5a5a6a', fontSize: 12 }}>Balanced ✓</span>
+            )}
+          </div>
+          
+          {/* Remove */}
+          <button
+            onClick={() => removeAsset(asset.id)}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: '#4a4a5a',
+              cursor: 'pointer',
+              padding: 4,
+              fontSize: 18,
+              lineHeight: 1,
+            }}
+          >
+            ×
+          </button>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div style={{
       minHeight: '100vh',
-      background: '#0b0b0e',
+      background: 'linear-gradient(180deg, #12121a 0%, #1a1a24 100%)',
       fontFamily: "'IBM Plex Sans', -apple-system, sans-serif",
       color: '#e8e8ed',
       padding: '32px 20px',
-      position: 'relative',
     }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
@@ -225,16 +551,26 @@ const App = () => {
         * { box-sizing: border-box; margin: 0; padding: 0; }
         
         .card {
-          background: linear-gradient(145deg, #141419 0%, #0f0f12 100%);
-          border: 1px solid #1f1f26;
+          background: linear-gradient(145deg, #1e1e28 0%, #16161e 100%);
+          border: 1px solid #2a2a35;
           border-radius: 16px;
         }
         
+        .card-pink {
+          background: linear-gradient(145deg, #2d1f2d 0%, #1e161e 100%);
+          border: 1px solid #3d2a3d;
+        }
+        
+        .card-green {
+          background: linear-gradient(145deg, #1f2d22 0%, #161e18 100%);
+          border: 1px solid #2a3d2d;
+        }
+        
         .input-field {
-          background: #0b0b0e;
-          border: 1px solid #2a2a35;
-          border-radius: 10px;
-          padding: 12px 14px;
+          background: #12121a;
+          border: 1px solid #3a3a45;
+          border-radius: 8px;
+          padding: 10px 12px;
           color: #e8e8ed;
           font-size: 14px;
           font-family: 'IBM Plex Mono', monospace;
@@ -244,13 +580,11 @@ const App = () => {
         }
         
         .input-field:focus {
-          border-color: #00d4aa;
-          box-shadow: 0 0 0 3px rgba(0, 212, 170, 0.1);
+          border-color: #E84A9C;
+          box-shadow: 0 0 0 3px rgba(232, 74, 156, 0.15);
         }
         
-        .input-field::placeholder {
-          color: #4a4a5a;
-        }
+        .input-field::placeholder { color: #4a4a5a; }
         
         .btn {
           border: none;
@@ -264,49 +598,56 @@ const App = () => {
         }
         
         .btn-primary {
-          background: linear-gradient(135deg, #00d4aa 0%, #00b894 100%);
-          color: #0b0b0e;
+          background: linear-gradient(135deg, #E84A9C 0%, #D43D8C 100%);
+          color: white;
         }
         
         .btn-primary:hover {
           transform: translateY(-2px);
-          box-shadow: 0 8px 24px rgba(0, 212, 170, 0.3);
+          box-shadow: 0 8px 24px rgba(232, 74, 156, 0.4);
+        }
+        
+        .btn-secondary {
+          background: linear-gradient(135deg, #F5D547 0%, #E5C537 100%);
+          color: #1a1a24;
+        }
+        
+        .btn-secondary:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 8px 24px rgba(245, 213, 71, 0.3);
         }
         
         .btn-ghost {
           background: transparent;
-          border: 1px solid #2a2a35;
-          color: #8a8a9a;
+          border: 1px solid #3a3a45;
+          color: #9a9aaa;
         }
         
         .btn-ghost:hover {
-          border-color: #3a3a4a;
-          color: #e8e8ed;
+          border-color: #E84A9C;
+          color: #E84A9C;
         }
         
-        .mono {
-          font-family: 'IBM Plex Mono', monospace;
-        }
+        .mono { font-family: 'IBM Plex Mono', monospace; }
         
         .tag {
-          display: inline-flex;
-          align-items: center;
+          display: inline-block;
           padding: 4px 10px;
           border-radius: 6px;
-          font-size: 11px;
-          font-weight: 600;
+          font-size: 10px;
+          font-weight: 700;
           text-transform: uppercase;
           letter-spacing: 0.5px;
         }
         
         .tag-buy {
-          background: rgba(0, 212, 170, 0.15);
-          color: #00d4aa;
+          background: rgba(91, 154, 111, 0.2);
+          color: #5B9A6F;
         }
         
         .tag-sell {
-          background: rgba(255, 107, 107, 0.15);
-          color: #ff6b6b;
+          background: rgba(232, 74, 156, 0.2);
+          color: #E84A9C;
         }
         
         .slider {
@@ -314,23 +655,18 @@ const App = () => {
           width: 100%;
           height: 6px;
           border-radius: 3px;
-          background: #1f1f26;
+          background: #2a2a35;
           outline: none;
         }
         
         .slider::-webkit-slider-thumb {
           -webkit-appearance: none;
-          width: 18px;
-          height: 18px;
+          width: 16px;
+          height: 16px;
           border-radius: 50%;
-          background: #00d4aa;
+          background: #F5D547;
           cursor: pointer;
-          transition: all 0.2s;
-        }
-        
-        .slider::-webkit-slider-thumb:hover {
-          transform: scale(1.2);
-          box-shadow: 0 0 12px rgba(0, 212, 170, 0.5);
+          box-shadow: 0 2px 8px rgba(245, 213, 71, 0.4);
         }
         
         .search-dropdown {
@@ -338,11 +674,11 @@ const App = () => {
           top: 100%;
           left: 0;
           right: 0;
-          background: #141419;
-          border: 1px solid #2a2a35;
+          background: #1e1e28;
+          border: 1px solid #3a3a45;
           border-radius: 12px;
           margin-top: 8px;
-          max-height: 320px;
+          max-height: 300px;
           overflow-y: auto;
           z-index: 1000;
           box-shadow: 0 16px 48px rgba(0,0,0,0.5);
@@ -355,30 +691,10 @@ const App = () => {
           padding: 12px 16px;
           cursor: pointer;
           transition: background 0.15s;
-          border-bottom: 1px solid #1f1f26;
+          border-bottom: 1px solid #2a2a35;
         }
         
-        .search-item:last-child {
-          border-bottom: none;
-        }
-        
-        .search-item:hover {
-          background: #1a1a22;
-        }
-        
-        .progress-bar {
-          height: 8px;
-          background: #1f1f26;
-          border-radius: 4px;
-          overflow: hidden;
-          position: relative;
-        }
-        
-        .progress-fill {
-          height: 100%;
-          border-radius: 4px;
-          transition: width 0.3s ease;
-        }
+        .search-item:hover { background: #2a2a35; }
         
         .fade-in {
           animation: fadeIn 0.4s ease forwards;
@@ -391,135 +707,208 @@ const App = () => {
 
         .currency-toggle {
           display: flex;
-          background: #141419;
-          border-radius: 10px;
-          padding: 4px;
-          border: 1px solid #1f1f26;
+          background: #1e1e28;
+          border-radius: 8px;
+          padding: 3px;
+          border: 1px solid #2a2a35;
         }
 
         .currency-btn {
-          padding: 8px 16px;
+          padding: 6px 14px;
           border: none;
           background: transparent;
           color: #6a6a7a;
           font-weight: 600;
-          font-size: 13px;
+          font-size: 12px;
           cursor: pointer;
-          border-radius: 7px;
+          border-radius: 6px;
           transition: all 0.2s;
           font-family: 'IBM Plex Sans', sans-serif;
         }
 
         .currency-btn.active {
-          background: #00d4aa;
-          color: #0b0b0e;
+          background: #E84A9C;
+          color: white;
+        }
+        
+        .health-ring {
+          position: relative;
+          width: 80px;
+          height: 80px;
+        }
+        
+        .health-ring svg {
+          transform: rotate(-90deg);
+        }
+        
+        .health-value {
+          position: absolute;
+          inset: 0;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 20px;
+          font-weight: 700;
         }
       `}</style>
       
-      <div style={{ maxWidth: 900, margin: '0 auto' }}>
+      <div style={{ maxWidth: 1000, margin: '0 auto' }}>
         {/* Header */}
-        <div style={{ marginBottom: 40 }} className="fade-in">
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 20 }}>
+        <div style={{ marginBottom: 32 }} className="fade-in">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 16 }}>
             <div>
               <h1 style={{ 
-                fontSize: 32, 
+                fontSize: 28, 
                 fontWeight: 700, 
-                marginBottom: 8,
-                color: '#fff',
-                letterSpacing: '-0.5px'
+                marginBottom: 4,
+                background: 'linear-gradient(135deg, #E84A9C 0%, #F5D547 100%)',
+                WebkitBackgroundClip: 'text',
+                WebkitTextFillColor: 'transparent',
               }}>
                 Portfolio Rebalancer
               </h1>
-              <p style={{ color: '#6a6a7a', fontSize: 15 }}>
-                Set targets, see what to buy or sell
+              <p style={{ color: '#6a6a7a', fontSize: 13 }}>
+                Track, balance & optimize your crypto
               </p>
             </div>
             
-            <div className="currency-toggle">
-              <button 
-                className={`currency-btn ${currency === 'eur' ? 'active' : ''}`}
-                onClick={() => setCurrency('eur')}
-              >
-                EUR €
+            <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+              <button className="btn btn-ghost" onClick={exportToCSV} style={{ padding: '8px 14px', fontSize: 12 }}>
+                📊 Export CSV
               </button>
-              <button 
-                className={`currency-btn ${currency === 'usd' ? 'active' : ''}`}
-                onClick={() => setCurrency('usd')}
-              >
-                USD $
-              </button>
+              <div className="currency-toggle">
+                <button 
+                  className={`currency-btn ${currency === 'eur' ? 'active' : ''}`}
+                  onClick={() => setCurrency('eur')}
+                >
+                  EUR
+                </button>
+                <button 
+                  className={`currency-btn ${currency === 'usd' ? 'active' : ''}`}
+                  onClick={() => setCurrency('usd')}
+                >
+                  USD
+                </button>
+              </div>
             </div>
           </div>
         </div>
 
-        {/* Portfolio Summary */}
-        <div className="card fade-in" style={{ padding: 28, marginBottom: 24 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 20 }}>
-            <div>
-              <p style={{ color: '#6a6a7a', fontSize: 13, marginBottom: 6, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Total Portfolio Value</p>
-              <p className="mono" style={{ fontSize: 36, fontWeight: 700, color: '#fff' }}>
-                {formatCurrency(totalValue)}
-              </p>
+        {/* Stats Row */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 16, marginBottom: 24 }}>
+          {/* Total Value */}
+          <div className="card fade-in" style={{ padding: 20 }}>
+            <p style={{ color: '#7a7a8a', fontSize: 11, marginBottom: 6, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Portfolio Value</p>
+            <p className="mono" style={{ fontSize: 26, fontWeight: 700, color: '#fff' }}>
+              {formatCurrency(totalValue)}
+            </p>
+          </div>
+          
+          {/* P&L */}
+          <div className={`card fade-in ${totalPnL >= 0 ? 'card-green' : 'card-pink'}`} style={{ padding: 20 }}>
+            <p style={{ color: '#7a7a8a', fontSize: 11, marginBottom: 6, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Total P&L</p>
+            <p className="mono" style={{ fontSize: 26, fontWeight: 700, color: totalPnL >= 0 ? '#5B9A6F' : '#E84A9C' }}>
+              {totalPnL >= 0 ? '+' : ''}{formatCurrency(totalPnL)}
+            </p>
+            <p style={{ color: totalPnL >= 0 ? '#5B9A6F' : '#E84A9C', fontSize: 12, marginTop: 4 }}>
+              {pnlPercent >= 0 ? '+' : ''}{pnlPercent.toFixed(2)}%
+            </p>
+          </div>
+          
+          {/* Health Score */}
+          <div className="card fade-in" style={{ padding: 20, display: 'flex', alignItems: 'center', gap: 16 }}>
+            <div className="health-ring">
+              <svg width="80" height="80" viewBox="0 0 80 80">
+                <circle cx="40" cy="40" r="34" fill="none" stroke="#2a2a35" strokeWidth="6" />
+                <circle 
+                  cx="40" cy="40" r="34" fill="none" 
+                  stroke={healthScore >= 80 ? '#5B9A6F' : healthScore >= 50 ? '#F5D547' : '#E84A9C'}
+                  strokeWidth="6" 
+                  strokeLinecap="round"
+                  strokeDasharray={`${(healthScore / 100) * 213.6} 213.6`}
+                />
+              </svg>
+              <div className="health-value" style={{ color: healthScore >= 80 ? '#5B9A6F' : healthScore >= 50 ? '#F5D547' : '#E84A9C' }}>
+                {healthScore}
+              </div>
             </div>
-            
-            <div style={{ textAlign: 'right' }}>
-              <p style={{ color: '#6a6a7a', fontSize: 13, marginBottom: 6, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Target Allocation</p>
-              <p className="mono" style={{ 
-                fontSize: 28, 
-                fontWeight: 700, 
-                color: totalTargetPercent === 100 ? '#00d4aa' : totalTargetPercent > 100 ? '#ff6b6b' : '#ffa94d'
-              }}>
-                {totalTargetPercent.toFixed(1)}%
+            <div>
+              <p style={{ color: '#7a7a8a', fontSize: 11, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Health Score</p>
+              <p style={{ color: '#9a9aaa', fontSize: 12, marginTop: 4 }}>
+                {healthScore >= 80 ? 'Well balanced' : healthScore >= 50 ? 'Needs attention' : 'Rebalance needed'}
               </p>
-              {totalTargetPercent !== 100 && (
-                <p style={{ color: totalTargetPercent > 100 ? '#ff6b6b' : '#ffa94d', fontSize: 12, marginTop: 4 }}>
-                  {totalTargetPercent > 100 ? `${(totalTargetPercent - 100).toFixed(1)}% over` : `${(100 - totalTargetPercent).toFixed(1)}% remaining`}
-                </p>
-              )}
             </div>
           </div>
           
-          {/* Overall allocation bar */}
-          {assets.length > 0 && (
-            <div style={{ marginTop: 24 }}>
-              <div style={{ display: 'flex', height: 12, borderRadius: 6, overflow: 'hidden', background: '#1f1f26' }}>
-                {assets.map((asset, i) => {
-                  const colors = ['#00d4aa', '#00b8d4', '#6c5ce7', '#ff6b6b', '#ffa94d', '#fd79a8', '#a29bfe', '#74b9ff'];
-                  return (
-                    <div
-                      key={asset.id}
-                      style={{
-                        width: `${getCurrentPercent(asset)}%`,
-                        background: colors[i % colors.length],
-                        transition: 'width 0.3s ease',
-                      }}
-                      title={`${asset.symbol}: ${getCurrentPercent(asset).toFixed(1)}%`}
-                    />
-                  );
-                })}
-              </div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, marginTop: 12 }}>
-                {assets.map((asset, i) => {
-                  const colors = ['#00d4aa', '#00b8d4', '#6c5ce7', '#ff6b6b', '#ffa94d', '#fd79a8', '#a29bfe', '#74b9ff'];
-                  return (
-                    <div key={asset.id} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <div style={{ width: 10, height: 10, borderRadius: 3, background: colors[i % colors.length] }} />
-                      <span style={{ color: '#8a8a9a', fontSize: 12 }}>{asset.symbol}</span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
+          {/* Target Status */}
+          <div className="card fade-in" style={{ padding: 20 }}>
+            <p style={{ color: '#7a7a8a', fontSize: 11, marginBottom: 6, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Target Allocation</p>
+            <p className="mono" style={{ 
+              fontSize: 26, 
+              fontWeight: 700, 
+              color: totalTargetPercent === 100 ? '#5B9A6F' : totalTargetPercent > 100 ? '#E84A9C' : '#F5D547'
+            }}>
+              {totalTargetPercent.toFixed(0)}%
+            </p>
+            {totalTargetPercent !== 100 && (
+              <p style={{ color: '#F5D547', fontSize: 12, marginTop: 4 }}>
+                {totalTargetPercent > 100 ? 'Over allocated!' : `${(100 - totalTargetPercent).toFixed(0)}% to assign`}
+              </p>
+            )}
+          </div>
         </div>
 
-        {/* Add Asset Button / Search */}
+        {/* Pie Charts */}
+        {assets.length > 0 && (
+          <div className="card fade-in" style={{ padding: 24, marginBottom: 24 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-around', flexWrap: 'wrap', gap: 32 }}>
+              <PieChart data={currentAllocationData} title="Current Allocation" size={140} />
+              <PieChart data={targetAllocationData} title="Target Allocation" size={140} />
+            </div>
+          </div>
+        )}
+
+        {/* Category Summaries */}
+        {(safeAssets.length > 0 || riskyAssets.length > 0) && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 16, marginBottom: 24 }}>
+            {safeAssets.length > 0 && (
+              <div className="card card-green fade-in" style={{ padding: 16 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                  <span style={{ fontSize: 16 }}>🛡️</span>
+                  <span style={{ color: '#5B9A6F', fontWeight: 600, fontSize: 13 }}>SAFE ASSETS</span>
+                </div>
+                <p className="mono" style={{ fontSize: 20, fontWeight: 700, color: '#fff' }}>
+                  {formatCurrency(getCategoryValue(safeAssets))}
+                </p>
+                <p style={{ color: '#6a6a7a', fontSize: 11, marginTop: 4 }}>
+                  {totalValue > 0 ? ((getCategoryValue(safeAssets) / totalValue) * 100).toFixed(1) : 0}% of portfolio • Target: {getCategoryTarget(safeAssets).toFixed(0)}%
+                </p>
+              </div>
+            )}
+            {riskyAssets.length > 0 && (
+              <div className="card card-pink fade-in" style={{ padding: 16 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                  <span style={{ fontSize: 16 }}>🚀</span>
+                  <span style={{ color: '#E84A9C', fontWeight: 600, fontSize: 13 }}>RISKY ASSETS</span>
+                </div>
+                <p className="mono" style={{ fontSize: 20, fontWeight: 700, color: '#fff' }}>
+                  {formatCurrency(getCategoryValue(riskyAssets))}
+                </p>
+                <p style={{ color: '#6a6a7a', fontSize: 11, marginTop: 4 }}>
+                  {totalValue > 0 ? ((getCategoryValue(riskyAssets) / totalValue) * 100).toFixed(1) : 0}% of portfolio • Target: {getCategoryTarget(riskyAssets).toFixed(0)}%
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Add Asset */}
         <div style={{ position: 'relative', marginBottom: 24, zIndex: 50 }} className="fade-in">
           {!showSearch ? (
             <button 
               className="btn btn-primary"
               onClick={() => setShowSearch(true)}
-              style={{ width: '100%', padding: 16, fontSize: 15 }}
+              style={{ width: '100%', padding: 14 }}
             >
               + Add Asset
             </button>
@@ -528,7 +917,7 @@ const App = () => {
               <input
                 type="text"
                 className="input-field"
-                placeholder="Search for a coin (e.g., Bitcoin, Ethereum, Solana...)"
+                placeholder="Search for a coin..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 autoFocus
@@ -545,23 +934,17 @@ const App = () => {
               {(searchResults.length > 0 || isSearching) && (
                 <div className="search-dropdown">
                   {isSearching ? (
-                    <div style={{ padding: 20, textAlign: 'center', color: '#6a6a7a' }}>
-                      Searching...
-                    </div>
+                    <div style={{ padding: 20, textAlign: 'center', color: '#6a6a7a' }}>Searching...</div>
                   ) : (
                     searchResults.map(coin => (
-                      <div 
-                        key={coin.id} 
-                        className="search-item"
-                        onClick={() => addAsset(coin)}
-                      >
+                      <div key={coin.id} className="search-item" onClick={() => addAsset(coin)}>
                         <img src={coin.thumb} alt={coin.symbol} style={{ width: 32, height: 32, borderRadius: 8 }} />
                         <div style={{ flex: 1 }}>
                           <p style={{ fontWeight: 600, marginBottom: 2 }}>{coin.name}</p>
-                          <p style={{ color: '#6a6a7a', fontSize: 13 }}>{coin.symbol.toUpperCase()}</p>
+                          <p style={{ color: '#6a6a7a', fontSize: 12 }}>{coin.symbol.toUpperCase()}</p>
                         </div>
                         {assets.find(a => a.id === coin.id) && (
-                          <span style={{ color: '#00d4aa', fontSize: 12 }}>Added</span>
+                          <span style={{ color: '#5B9A6F', fontSize: 11 }}>Added</span>
                         )}
                       </div>
                     ))
@@ -573,181 +956,18 @@ const App = () => {
         </div>
 
         {/* Assets List */}
-        {assets.length === 0 ? (
+        {sortedAssets.length === 0 ? (
           <div className="card fade-in" style={{ padding: 60, textAlign: 'center' }}>
-            <div style={{ fontSize: 48, marginBottom: 16 }}>📊</div>
-            <p style={{ color: '#6a6a7a', fontSize: 15, marginBottom: 8 }}>No assets yet</p>
-            <p style={{ color: '#4a4a5a', fontSize: 13 }}>Click "Add Asset" to search for coins on CoinGecko</p>
+            <div style={{ fontSize: 48, marginBottom: 16 }}>🐧</div>
+            <p style={{ color: '#7a7a8a', fontSize: 15 }}>Add your first asset to get started</p>
           </div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            {assets.map((asset, index) => {
-              const rebalance = getRebalanceAction(asset);
-              const currentPercent = getCurrentPercent(asset);
-              const price = currency === 'eur' ? asset.priceEur : asset.priceUsd;
-              const colors = ['#00d4aa', '#00b8d4', '#6c5ce7', '#ff6b6b', '#ffa94d', '#fd79a8', '#a29bfe', '#74b9ff'];
-              const assetColor = colors[index % colors.length];
-              
-              return (
-                <div key={asset.id} className="card fade-in" style={{ padding: 24 }}>
-                  <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
-                    {/* Asset Info */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 14, minWidth: 180 }}>
-                      <img src={asset.thumb} alt={asset.symbol} style={{ width: 44, height: 44, borderRadius: 12 }} />
-                      <div>
-                        <p style={{ fontWeight: 600, fontSize: 16, marginBottom: 2 }}>{asset.symbol}</p>
-                        <p className="mono" style={{ color: '#6a6a7a', fontSize: 13 }}>
-                          {price > 0 ? formatCurrency(price) : 'Loading...'}
-                        </p>
-                      </div>
-                    </div>
-                    
-                    {/* Holdings Input */}
-                    <div style={{ flex: 1, minWidth: 140 }}>
-                      <label style={{ display: 'block', fontSize: 11, color: '#6a6a7a', marginBottom: 6, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                        Holdings
-                      </label>
-                      <input
-                        type="number"
-                        className="input-field"
-                        value={asset.holdings || ''}
-                        onChange={(e) => updateHoldings(asset.id, e.target.value)}
-                        placeholder="0.00"
-                        step="any"
-                      />
-                      <p className="mono" style={{ color: '#4a4a5a', fontSize: 12, marginTop: 6 }}>
-                        = {formatCurrency(getAssetValue(asset))}
-                      </p>
-                    </div>
-                    
-                    {/* Target Allocation */}
-                    <div style={{ flex: 1, minWidth: 180 }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                        <label style={{ fontSize: 11, color: '#6a6a7a', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                          Target
-                        </label>
-                        <span className="mono" style={{ color: assetColor, fontWeight: 600, fontSize: 14 }}>
-                          {asset.targetPercent.toFixed(1)}%
-                        </span>
-                      </div>
-                      <input
-                        type="range"
-                        className="slider"
-                        min="0"
-                        max="100"
-                        step="0.5"
-                        value={asset.targetPercent}
-                        onChange={(e) => updateTarget(asset.id, e.target.value)}
-                        style={{
-                          background: `linear-gradient(to right, ${assetColor} 0%, ${assetColor} ${asset.targetPercent}%, #1f1f26 ${asset.targetPercent}%, #1f1f26 100%)`
-                        }}
-                      />
-                      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8 }}>
-                        <span style={{ color: '#4a4a5a', fontSize: 11 }}>Current: {currentPercent.toFixed(1)}%</span>
-                        <input
-                          type="number"
-                          className="input-field mono"
-                          value={asset.targetPercent}
-                          onChange={(e) => updateTarget(asset.id, e.target.value)}
-                          style={{ width: 70, padding: '4px 8px', fontSize: 12, textAlign: 'right' }}
-                          min="0"
-                          max="100"
-                          step="0.5"
-                        />
-                      </div>
-                    </div>
-                    
-                    {/* Rebalance Action */}
-                    <div style={{ minWidth: 140, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', justifyContent: 'center' }}>
-                      {rebalance ? (
-                        <>
-                          <span className={`tag ${rebalance.action === 'BUY' ? 'tag-buy' : 'tag-sell'}`}>
-                            {rebalance.action}
-                          </span>
-                          <p className="mono" style={{ 
-                            color: rebalance.action === 'BUY' ? '#00d4aa' : '#ff6b6b',
-                            fontWeight: 600,
-                            fontSize: 15,
-                            marginTop: 6,
-                          }}>
-                            {formatCurrency(rebalance.amount)}
-                          </p>
-                          <p className="mono" style={{ color: '#6a6a7a', fontSize: 12, marginTop: 2 }}>
-                            ≈ {formatNumber(rebalance.units)} {asset.symbol}
-                          </p>
-                        </>
-                      ) : (
-                        <span style={{ color: '#4a4a5a', fontSize: 13 }}>Balanced ✓</span>
-                      )}
-                    </div>
-                    
-                    {/* Remove Button */}
-                    <button
-                      onClick={() => removeAsset(asset.id)}
-                      style={{
-                        background: 'transparent',
-                        border: 'none',
-                        color: '#4a4a5a',
-                        cursor: 'pointer',
-                        padding: 8,
-                        fontSize: 18,
-                        lineHeight: 1,
-                        alignSelf: 'flex-start',
-                      }}
-                      title="Remove asset"
-                    >
-                      ×
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {sortedAssets.map((asset, index) => renderAssetCard(asset, index))}
           </div>
         )}
 
-        {/* Rebalancing Summary */}
-        {assets.length > 0 && totalTargetPercent === 100 && (
-          <div className="card fade-in" style={{ padding: 24, marginTop: 24 }}>
-            <h3 style={{ fontSize: 16, fontWeight: 600, marginBottom: 16 }}>Rebalancing Summary</h3>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 16 }}>
-              {assets.map(asset => {
-                const rebalance = getRebalanceAction(asset);
-                if (!rebalance) return null;
-                
-                return (
-                  <div key={asset.id} style={{ 
-                    display: 'flex', 
-                    alignItems: 'center', 
-                    gap: 12,
-                    padding: 12,
-                    background: rebalance.action === 'BUY' ? 'rgba(0,212,170,0.05)' : 'rgba(255,107,107,0.05)',
-                    borderRadius: 10,
-                    border: `1px solid ${rebalance.action === 'BUY' ? 'rgba(0,212,170,0.2)' : 'rgba(255,107,107,0.2)'}`
-                  }}>
-                    <img src={asset.thumb} alt={asset.symbol} style={{ width: 28, height: 28, borderRadius: 6 }} />
-                    <div style={{ flex: 1 }}>
-                      <p style={{ fontWeight: 500, fontSize: 13 }}>
-                        <span style={{ color: rebalance.action === 'BUY' ? '#00d4aa' : '#ff6b6b' }}>
-                          {rebalance.action}
-                        </span>
-                        {' '}{asset.symbol}
-                      </p>
-                      <p className="mono" style={{ color: '#6a6a7a', fontSize: 12 }}>
-                        {formatCurrency(rebalance.amount)}
-                      </p>
-                    </div>
-                  </div>
-                );
-              }).filter(Boolean)}
-              
-              {assets.every(a => !getRebalanceAction(a)) && (
-                <p style={{ color: '#00d4aa', fontSize: 14 }}>✓ Portfolio is balanced</p>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* Refresh Prices Button */}
+        {/* Refresh */}
         {assets.length > 0 && (
           <div style={{ marginTop: 24, textAlign: 'center' }}>
             <button 
@@ -758,15 +978,15 @@ const App = () => {
             >
               {pricesLoading ? 'Refreshing...' : '↻ Refresh Prices'}
             </button>
-            <p style={{ color: '#4a4a5a', fontSize: 11, marginTop: 8 }}>
+            <p style={{ color: '#4a4a5a', fontSize: 10, marginTop: 6 }}>
               Prices from CoinGecko
             </p>
           </div>
         )}
 
         {/* Footer */}
-        <div style={{ textAlign: 'center', marginTop: 48, color: '#3a3a4a', fontSize: 12 }}>
-          <p>💡 Set your target allocations to 100% total to see rebalancing actions</p>
+        <div style={{ textAlign: 'center', marginTop: 40, color: '#3a3a4a', fontSize: 11 }}>
+          <p>Set targets to 100% to see rebalancing actions 🎯</p>
         </div>
       </div>
     </div>
