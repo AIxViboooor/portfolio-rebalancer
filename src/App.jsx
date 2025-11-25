@@ -312,7 +312,7 @@ const App = () => {
           margin-top: 8px;
           max-height: 320px;
           overflow-y: auto;
-          z-index: 100;
+          z-index: 1000;
           box-shadow: 0 16px 48px rgba(0,0,0,0.5);
         }
         
@@ -482,7 +482,7 @@ const App = () => {
         </div>
 
         {/* Add Asset Button / Search */}
-        <div style={{ position: 'relative', marginBottom: 24 }} className="fade-in">
+        <div style={{ position: 'relative', marginBottom: 24, zIndex: 50 }} className="fade-in">
           {!showSearch ? (
             <button 
               className="btn btn-primary"
